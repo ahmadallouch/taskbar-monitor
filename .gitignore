@@ -1,0 +1,4 @@
+bin/
+obj/
+settings.json
+*.user
