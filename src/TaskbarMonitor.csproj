@@ -3,25 +3,33 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <AssemblyName>TaskbarMonitor</AssemblyName>
     <RootNamespace>TaskbarMonitor</RootNamespace>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
-    <NoWarn>WFO0003</NoWarn>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
-    <DebugType>none</DebugType>
+  </PropertyGroup>
 
-    <!-- Footprint: this process runs from login to logoff, so trade a little
-         throughput for a smaller, quieter resident set. -->
+  <PropertyGroup>
+    <!-- Compiled ahead of time to a single native executable. This removes the JIT and
+         the managed runtime entirely, which is most of what the process would otherwise
+         cost in memory, and means no .NET runtime has to be installed to run it. -->
+    <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <ServerGarbageCollection>false</ServerGarbageCollection>
-    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
-    <TieredCompilationQuickJitForLoops>true</TieredCompilationQuickJitForLoops>
-    <AutoreleasePoolSupport>false</AutoreleasePoolSupport>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
     <EventSourceSupport>false</EventSourceSupport>
     <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <AutoreleasePoolSupport>false</AutoreleasePoolSupport>
+    <StackTraceSupport>false</StackTraceSupport>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+  </ItemGroup>
 
 </Project>

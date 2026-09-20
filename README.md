@@ -16,12 +16,16 @@ something sitting on top of it.
 | --- | --- |
 | Operating system | Windows 11 (build 22000 or later), or Windows 10 version 1607 or later |
 | Architecture | x64 |
-| To run a release build | .NET 10 Desktop Runtime, that is `Microsoft.WindowsDesktop.App` 10.0.0 or newer |
-| To build from source | .NET 10 SDK |
+| To run a release build | Nothing. It is a single self contained executable. |
+| To build from source | .NET 10 SDK, plus the Visual Studio C++ build tools and Windows SDK that native AOT links against |
 
-There are no third party dependencies. The project references no NuGet packages at
-all and uses only what ships with the Windows Desktop SDK, so there is nothing to
-restore beyond the framework itself.
+The published binary is compiled ahead of time to native code, so there is no .NET
+runtime to install and nothing to unpack. One executable, roughly 3 MB, is the whole
+program.
+
+The only package reference is `System.Drawing.Common`, which is the GDI+ wrapper used
+for text and bar drawing. Everything else is direct P/Invoke into user32, gdi32,
+kernel32, shell32, psapi, pdh and ntdll.
 
 Everything here was written and verified against Windows 11 Pro 25H2 (build 26200) on
 x64, with a single 1920x1200 display at 125% scaling, using .NET SDK 10.0.112. Where
@@ -30,9 +34,9 @@ says so rather than implying it was tested.
 
 ## Running it
 
-Download the archive from the releases page, extract it anywhere, and run
-`TaskbarMonitor.exe`. The widget appears at the left end of the taskbar within a
-second or two.
+Download `TaskbarMonitor.exe` from the releases page and run it. There is no
+installer and nothing to extract. The widget appears at the left end of the taskbar
+within a second or two, and writes a `settings.json` beside itself on first run.
 
 Right click it for a menu with Task Manager, a startup toggle, settings, and exit.
 Double click it to open Task Manager.
@@ -88,6 +92,33 @@ opening one requires elevation. Task Manager can show that column because it run
 elevated. An unelevated widget cannot, so rather than estimate it or quietly show
 something else, the rotation covers CPU, memory, disk and GPU and leaves network out.
 The machine wide up and down figures are real and come from the adapter counters.
+
+## Footprint
+
+The point of a widget like this is that you forget it is running, so its own cost
+matters. Measured on the machine described above, sampling once a second and ranking
+processes every two:
+
+| | |
+| --- | --- |
+| Working set | about 7 MB, steady over hours |
+| CPU | around 1% of one core, which on a 16 core machine is under 0.1% of the whole |
+| Threads | 4 |
+| On disk | a single 3.1 MB executable |
+
+Most of that came from compiling ahead of time. The same code on the normal .NET
+runtime with WinForms used about 31 MB and 12 threads, so removing the runtime and
+the WinForms dependency cut memory by roughly three quarters.
+
+Beyond that, the repaint is built to do as little as possible. The drawing surface is
+a DIB section shared with GDI+ so a frame costs no copy or format conversion, text
+measurements are memoised, frames identical to the previous one are skipped entirely,
+and `SetWindowPos` is only called when the geometry actually changes, because calling
+it unconditionally makes Explorer revalidate that strip of taskbar every time.
+
+While a fullscreen application is in front, meaning a game or a fullscreen video, the
+taskbar is covered and nothing drawn could be seen, so both the drawing and the
+process ranking stop until it goes away.
 
 ## Configuration
 
@@ -238,9 +269,14 @@ Known gaps, collected in one place:
 build.cmd
 ```
 
-This stops any running instance, because it holds the executable open, rebuilds into
-`bin\`, and starts the new build. Plain `dotnet build src\TaskbarMonitor.csproj` works
-too if the widget is not currently running.
+This stops any running instance, because it holds the executable open, publishes into
+`bin\`, and starts the new build. The underlying command is
+`dotnet publish src\TaskbarMonitor.csproj -c Release`.
+
+Native AOT compilation needs a C++ toolchain to link the final binary. If
+`dotnet publish` fails at the linking step, install the Desktop development with C++
+workload from the Visual Studio Installer, which supplies both the MSVC linker and the
+Windows SDK libraries.
 
 ## Layout
 
@@ -252,6 +288,7 @@ src\
   Theme.cs         shell colours and the level ramp
   Settings.cs      settings.json
   Overlay.cs       the layered child window and its drawing
+  Win32Window.cs   window class registration and message routing
   Program.cs       lifecycle, reattach watchdog, menu
 tools\             diagnostic and capture scripts used while developing
 ```

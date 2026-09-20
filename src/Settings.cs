@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace TaskbarMonitor
 {
@@ -81,7 +82,7 @@ namespace TaskbarMonitor
             {
                 if (File.Exists(Path))
                 {
-                    Settings s = JsonSerializer.Deserialize<Settings>(File.ReadAllText(Path));
+                    Settings s = JsonSerializer.Deserialize(File.ReadAllText(Path), SettingsJson.Default.Settings);
                     if (s != null)
                     {
                         if (s.IntervalMs < 200) s.IntervalMs = 200;
@@ -105,11 +106,19 @@ namespace TaskbarMonitor
         {
             try
             {
-                JsonSerializerOptions opt = new JsonSerializerOptions();
-                opt.WriteIndented = true;
-                File.WriteAllText(Path, JsonSerializer.Serialize(this, opt));
+                File.WriteAllText(Path, JsonSerializer.Serialize(this, SettingsJson.Default.Settings));
             }
             catch { }
         }
+    }
+
+    /// <summary>
+    /// Source generated serialisation. Reflection based JSON does not survive ahead of
+    /// time compilation, since the trimmer cannot see which members are used.
+    /// </summary>
+    [JsonSourceGenerationOptions(WriteIndented = true)]
+    [JsonSerializable(typeof(Settings))]
+    internal partial class SettingsJson : JsonSerializerContext
+    {
     }
 }

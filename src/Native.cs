@@ -66,6 +66,36 @@ namespace TaskbarMonitor
             public byte AlphaFormat;
         }
 
+        public delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct WNDCLASSEX
+        {
+            public uint cbSize;
+            public uint style;
+            public IntPtr lpfnWndProc;
+            public int cbClsExtra;
+            public int cbWndExtra;
+            public IntPtr hInstance;
+            public IntPtr hIcon;
+            public IntPtr hCursor;
+            public IntPtr hbrBackground;
+            public string lpszMenuName;
+            public string lpszClassName;
+            public IntPtr hIconSm;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MSG
+        {
+            public IntPtr hwnd;
+            public uint message;
+            public IntPtr wParam;
+            public IntPtr lParam;
+            public uint time;
+            public POINT pt;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct MEMORYSTATUSEX
         {
@@ -79,6 +109,72 @@ namespace TaskbarMonitor
             public ulong ullAvailVirtual;
             public ulong ullAvailExtendedVirtual;
         }
+
+        public const int WM_TIMER = 0x0113;
+        public const int WM_DESTROY = 0x0002;
+        public const int WM_NULL = 0x0000;
+
+        public const uint MF_STRING = 0x0000;
+        public const uint MF_SEPARATOR = 0x0800;
+        public const uint MF_CHECKED = 0x0008;
+        public const uint TPM_RIGHTBUTTON = 0x0002;
+        public const uint TPM_RETURNCMD = 0x0100;
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern ushort RegisterClassExW(ref WNDCLASSEX wc);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern IntPtr CreateWindowExW(int exStyle, string className, string windowName,
+            int style, int x, int y, int width, int height,
+            IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+
+        [DllImport("user32.dll")]
+        public static extern bool DestroyWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr DefWindowProcW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetMessageW(out MSG msg, IntPtr hWnd, uint filterMin, uint filterMax);
+
+        [DllImport("user32.dll")]
+        public static extern bool TranslateMessage(ref MSG msg);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr DispatchMessageW(ref MSG msg);
+
+        [DllImport("user32.dll")]
+        public static extern void PostQuitMessage(int exitCode);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetTimer(IntPtr hWnd, IntPtr id, uint interval, IntPtr callback);
+
+        [DllImport("user32.dll")]
+        public static extern bool KillTimer(IntPtr hWnd, IntPtr id);
+
+        [DllImport("user32.dll")]
+        public static extern bool GetCursorPos(out POINT pt);
+
+        [DllImport("user32.dll")]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr CreatePopupMenu();
+
+        [DllImport("user32.dll")]
+        public static extern bool DestroyMenu(IntPtr menu);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern bool AppendMenuW(IntPtr menu, uint flags, IntPtr id, string item);
+
+        [DllImport("user32.dll")]
+        public static extern int TrackPopupMenuEx(IntPtr menu, uint flags, int x, int y, IntPtr hWnd, IntPtr overlay);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr GetModuleHandleW(string name);
 
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);

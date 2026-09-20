@@ -76,7 +76,7 @@ namespace TaskbarMonitor
         private void ReadRam(Sample s)
         {
             Native.MEMORYSTATUSEX m = new Native.MEMORYSTATUSEX();
-            m.dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(Native.MEMORYSTATUSEX));
+            m.dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Native.MEMORYSTATUSEX>();
             if (!Native.GlobalMemoryStatusEx(ref m)) return;
 
             const double Gb = 1024.0 * 1024.0 * 1024.0;

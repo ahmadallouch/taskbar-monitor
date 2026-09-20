@@ -3,8 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
-using System.Windows.Forms;
-using WinFormsTimer = System.Windows.Forms.Timer;
 using Microsoft.Win32;
 
 namespace TaskbarMonitor
@@ -17,9 +15,9 @@ namespace TaskbarMonitor
         [STAThread]
         private static int Main(string[] args)
         {
-            foreach (string a in args)
+            for (int i = 0; i < args.Length; i++)
             {
-                string arg = a.TrimStart('-', '/').ToLowerInvariant();
+                string arg = args[i].TrimStart('-', '/').ToLowerInvariant();
                 if (arg == "install") { SetAutoStart(true); return 0; }
                 if (arg == "uninstall") { SetAutoStart(false); return 0; }
             }
@@ -27,21 +25,25 @@ namespace TaskbarMonitor
             bool isNew;
             using (Mutex mutex = new Mutex(true, @"Local\TaskbarMonitor.SingleInstance", out isNew))
             {
-                if (!isNew) return 0;   // already running
+                if (!isNew) return 0;
 
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new TrayAppContext());
+                using (App app = new App()) app.Run();
+                GC.KeepAlive(mutex);
             }
             return 0;
+        }
+
+        internal static string ExecutablePath
+        {
+            get { return Environment.ProcessPath ?? string.Empty; }
         }
 
         internal static bool IsAutoStartEnabled()
         {
             try
             {
-                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(RunKey))
-                    return k != null && k.GetValue(RunValue) != null;
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKey))
+                    return key != null && key.GetValue(RunValue) != null;
             }
             catch { return false; }
         }
@@ -50,11 +52,11 @@ namespace TaskbarMonitor
         {
             try
             {
-                using (RegistryKey k = Registry.CurrentUser.OpenSubKey(RunKey, true))
+                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RunKey, true))
                 {
-                    if (k == null) return;
-                    if (enable) k.SetValue(RunValue, "\"" + Application.ExecutablePath + "\"");
-                    else k.DeleteValue(RunValue, false);
+                    if (key == null) return;
+                    if (enable) key.SetValue(RunValue, "\"" + ExecutablePath + "\"");
+                    else key.DeleteValue(RunValue, false);
                 }
             }
             catch { }
@@ -62,92 +64,150 @@ namespace TaskbarMonitor
     }
 
     /// <summary>
-    /// Owns the message loop. The host window is a normal (never shown) top-level
-    /// window rather than a message-only one, because message-only windows do not
-    /// receive the "TaskbarCreated" broadcast that tells us Explorer restarted.
+    /// Owns the message loop and the widget's lifetime.
+    ///
+    /// The host is a hidden top level window rather than a message only one, because
+    /// message only windows do not receive the TaskbarCreated broadcast that tells us
+    /// Explorer has restarted.
     /// </summary>
-    internal sealed class TrayAppContext : ApplicationContext
+    internal sealed class App : Win32Window
     {
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
         [DllImport("psapi.dll")]
-        private static extern bool EmptyWorkingSet(IntPtr hProcess);
+        private static extern bool EmptyWorkingSet(IntPtr process);
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetCurrentProcess();
 
-        private readonly Host _host;
+        [DllImport("shell32.dll")]
+        private static extern int SHQueryUserNotificationState(out int state);
+
+        // QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE
+        private const int StateBusy = 2;
+        private const int StatePresentationMode = 4;
+
+        private static readonly uint TaskbarCreated = Native.RegisterWindowMessage("TaskbarCreated");
+
+        private static readonly IntPtr TickTimer = new IntPtr(1);
+        private static readonly IntPtr GuardTimer = new IntPtr(2);
+        private static readonly IntPtr TrimTimer = new IntPtr(3);
+
+        private const int CommandTaskManager = 1;
+        private const int CommandStartup = 2;
+        private const int CommandEditSettings = 3;
+        private const int CommandReload = 4;
+        private const int CommandExit = 5;
+
+        private readonly Dictionary<IntPtr, Overlay> _overlays = new Dictionary<IntPtr, Overlay>();
         private readonly Metrics _metrics = new Metrics();
-        private readonly WinFormsTimer _tick = new WinFormsTimer();
-        private readonly WinFormsTimer _guard = new WinFormsTimer();
 
         private Settings _cfg;
         private Theme _theme;
-        private readonly Dictionary<IntPtr, Overlay> _overlays = new Dictionary<IntPtr, Overlay>();
-        private ContextMenuStrip _menu;
         private TopConsumer _top;
-        private System.Threading.Timer _topTimer;
-        private System.Threading.Timer _trimTimer;
+        private Timer _topTimer;
         private int _topBusy;
+        private volatile bool _suspended;
 
-        public TrayAppContext()
+        public void Run()
         {
             _cfg = Settings.Load();
             _theme = Theme.Load();
 
-            _host = new Host(this);
-            IntPtr force = _host.Handle;   // realize the HWND so broadcasts arrive
+            CreateWindow(Native.WS_EX_TOOLWINDOW, 0, IntPtr.Zero, 0, 0, 0, 0, "TaskbarMonitor");
 
-            BuildMenu();
             StartTopConsumer();
             EnsureAttached();
 
-            // The .NET runtime commits a lot of start-up scratch that is never touched
-            // again. Handing it back keeps the resident set small for a process that
-            // will sit on the taskbar for weeks.
-            _trimTimer = new System.Threading.Timer(delegate { Trim(); }, null, 8000, 300000);
+            Native.SetTimer(Handle, TickTimer, (uint)_cfg.IntervalMs, IntPtr.Zero);
+            Native.SetTimer(Handle, GuardTimer, 2000, IntPtr.Zero);
 
-            _tick.Interval = _cfg.IntervalMs;
-            _tick.Tick += delegate { Tick(); };
-            _tick.Start();
+            // The runtime commits start up scratch it never touches again. Handing it
+            // back keeps the resident set small for a process that runs for weeks.
+            Native.SetTimer(Handle, TrimTimer, 60000, IntPtr.Zero);
+            Trim();
 
-            // Re-attach after Explorer restarts, DPI/resolution changes, or if the
-            // taskbar's XAML island climbs back above us in the child z-order.
-            _guard.Interval = 2000;
-            _guard.Tick += delegate { EnsureAttached(); };
-            _guard.Start();
+            Native.MSG msg;
+            while (Native.GetMessageW(out msg, IntPtr.Zero, 0, 0) > 0)
+            {
+                Native.TranslateMessage(ref msg);
+                Native.DispatchMessageW(ref msg);
+            }
+        }
+
+        protected override bool OnMessage(uint message, IntPtr wParam, IntPtr lParam, ref IntPtr result)
+        {
+            if (message == Native.WM_TIMER)
+            {
+                long id = wParam.ToInt64();
+                if (id == 1) Tick();
+                else if (id == 2) EnsureAttached();
+                else if (id == 3) Trim();
+                return true;
+            }
+
+            if (message == TaskbarCreated)
+            {
+                OnTaskbarRecreated();
+                return true;
+            }
+
+            if (message == Native.WM_SETTINGCHANGE)
+            {
+                string changed = lParam != IntPtr.Zero ? Marshal.PtrToStringUni(lParam) : null;
+                if (changed == "ImmersiveColorSet") OnThemeChanged();
+                return true;
+            }
+
+            if (message == Native.WM_DISPLAYCHANGE || message == Native.WM_DPICHANGED)
+            {
+                OnTaskbarRecreated();
+                return true;
+            }
+
+            return false;
         }
 
         private void Tick()
         {
-            if (_overlays.Count == 0) return;
+            _suspended = FullScreenAppInFront();
+            if (_suspended || _overlays.Count == 0) return;
 
             Sample sample = _metrics.Read();
             TopHit hit = CurrentTopHit();
 
-            foreach (KeyValuePair<IntPtr, Overlay> kv in _overlays)
+            foreach (KeyValuePair<IntPtr, Overlay> pair in _overlays)
             {
-                if (!kv.Value.IsAttached) continue;
-                try { kv.Value.Render(sample, hit); }
+                if (!pair.Value.IsAttached) continue;
+                try { pair.Value.Render(sample, hit); }
                 catch { /* a transient GDI failure must not kill the loop */ }
             }
         }
 
         /// <summary>
-        /// Cycles through whichever categories currently have something to report.
-        /// Driven by the wall clock rather than a counter so the dwell time stays
-        /// honest regardless of how often we happen to repaint.
+        /// While a game or a fullscreen video is in front, the taskbar is covered and
+        /// nothing we draw can be seen, so both the drawing and the process ranking stop
+        /// until it goes away.
+        /// </summary>
+        private static bool FullScreenAppInFront()
+        {
+            int state;
+            if (SHQueryUserNotificationState(out state) != 0) return false;
+            return state >= StateBusy && state <= StatePresentationMode;
+        }
+
+        /// <summary>
+        /// Cycles through whichever resources currently have something to report.
+        /// Driven by the wall clock rather than a counter, so the dwell time holds
+        /// regardless of how often we happen to repaint.
         /// </summary>
         private TopHit CurrentTopHit()
         {
             if (_top == null) return null;
 
-            TopSnapshot snap = _top.Current;
-            if (snap == null || snap.Items.Length == 0) return null;
+            TopSnapshot snapshot = _top.Current;
+            if (snapshot == null || snapshot.Items.Length == 0) return null;
 
             long slot = Environment.TickCount64 / Math.Max(1000, _cfg.TopRotateMs);
-            return snap.Items[(int)(slot % snap.Items.Length)];
+            return snapshot.Items[(int)(slot % snapshot.Items.Length)];
         }
 
         /// <summary>
@@ -161,9 +221,9 @@ namespace TaskbarMonitor
             if (!_cfg.ShowTopConsumer) return;
 
             _top = new TopConsumer(_cfg);
-            _topTimer = new System.Threading.Timer(delegate
+            _topTimer = new Timer(delegate
             {
-                // A slow sample (PDH can occasionally take a while) must not pile up.
+                if (_suspended) return;
                 if (Interlocked.Exchange(ref _topBusy, 1) == 1) return;
                 try { _top.Sample(); }
                 finally { Interlocked.Exchange(ref _topBusy, 0); }
@@ -176,22 +236,16 @@ namespace TaskbarMonitor
             _top = null;
         }
 
-        private static void Trim()
-        {
-            try { EmptyWorkingSet(GetCurrentProcess()); }
-            catch { }
-        }
-
         private void EnsureAttached()
         {
             List<IntPtr> bars = Taskbars();
 
             List<IntPtr> gone = null;
-            foreach (KeyValuePair<IntPtr, Overlay> kv in _overlays)
+            foreach (KeyValuePair<IntPtr, Overlay> pair in _overlays)
             {
-                if (bars.Contains(kv.Key)) continue;
+                if (bars.Contains(pair.Key)) continue;
                 if (gone == null) gone = new List<IntPtr>();
-                gone.Add(kv.Key);
+                gone.Add(pair.Key);
             }
             if (gone != null)
             {
@@ -206,25 +260,25 @@ namespace TaskbarMonitor
             for (int i = 0; i < bars.Count; i++)
             {
                 IntPtr bar = bars[i];
-                Overlay o;
+                Overlay overlay;
 
-                if (!_overlays.TryGetValue(bar, out o))
+                if (!_overlays.TryGetValue(bar, out overlay))
                 {
-                    o = NewOverlay();
-                    o.Attach(bar);
-                    _overlays[bar] = o;
+                    overlay = NewOverlay();
+                    overlay.Attach(bar);
+                    _overlays[bar] = overlay;
                     added = true;
                 }
-                else if (!o.IsAttached)
+                else if (!overlay.IsAttached)
                 {
-                    o.Attach(bar);
+                    overlay.Attach(bar);
                     added = true;
                 }
 
-                o.BringToFront();
+                overlay.BringToFront();
             }
 
-            if (added) Tick();      // paint immediately so there is no blank frame
+            if (added) Tick();
         }
 
         /// <summary>
@@ -255,67 +309,45 @@ namespace TaskbarMonitor
 
         private static bool IsUsable(IntPtr bar)
         {
-            Native.RECT r;
-            if (bar == IntPtr.Zero || !Native.IsWindow(bar) || !Native.GetWindowRect(bar, out r)) return false;
-            return r.Width > r.Height;
+            Native.RECT rect;
+            if (bar == IntPtr.Zero || !Native.IsWindow(bar) || !Native.GetWindowRect(bar, out rect)) return false;
+            return rect.Width > rect.Height;
         }
 
         private Overlay NewOverlay()
         {
-            Overlay o = new Overlay(_cfg, _theme);
-            o.RightClicked += delegate { ShowMenu(); };
-            o.DoubleClicked += delegate { Launch("taskmgr.exe"); };
-            return o;
+            Overlay overlay = new Overlay(_cfg, _theme);
+            overlay.RightClicked += delegate { ShowMenu(); };
+            overlay.DoubleClicked += delegate { Launch("taskmgr.exe", null); };
+            return overlay;
         }
 
         private void DisposeOverlays()
         {
-            foreach (KeyValuePair<IntPtr, Overlay> kv in _overlays) kv.Value.Dispose();
+            foreach (KeyValuePair<IntPtr, Overlay> pair in _overlays) pair.Value.Dispose();
             _overlays.Clear();
         }
 
-        public void OnTaskbarRecreated()
+        private void OnTaskbarRecreated()
         {
             DisposeOverlays();
             EnsureAttached();
         }
 
-        public void OnThemeChanged()
+        private void OnThemeChanged()
         {
             _theme = Theme.Load();
-            foreach (KeyValuePair<IntPtr, Overlay> kv in _overlays) kv.Value.ApplyTheme(_theme);
+            foreach (KeyValuePair<IntPtr, Overlay> pair in _overlays) pair.Value.ApplyTheme(_theme);
             Tick();
-        }
-
-        private void BuildMenu()
-        {
-            _menu = new ContextMenuStrip();
-            _menu.Items.Add("Task Manager", null, delegate { Launch("taskmgr.exe"); });
-            _menu.Items.Add(new ToolStripSeparator());
-
-            ToolStripMenuItem startup = new ToolStripMenuItem("Start with Windows");
-            startup.Checked = Program.IsAutoStartEnabled();
-            startup.Click += delegate
-            {
-                bool now = !Program.IsAutoStartEnabled();
-                Program.SetAutoStart(now);
-                startup.Checked = now;
-            };
-            _menu.Items.Add(startup);
-
-            _menu.Items.Add("Edit settings…", null, delegate { Launch("notepad.exe", Settings.Path); });
-            _menu.Items.Add("Reload settings", null, delegate { ReloadSettings(); });
-            _menu.Items.Add(new ToolStripSeparator());
-            _menu.Items.Add("Exit", null, delegate { Shutdown(); });
-
-            _menu.Opening += delegate { startup.Checked = Program.IsAutoStartEnabled(); };
         }
 
         private void ReloadSettings()
         {
             _cfg = Settings.Load();
             _theme = Theme.Load();
-            _tick.Interval = _cfg.IntervalMs;
+
+            Native.KillTimer(Handle, TickTimer);
+            Native.SetTimer(Handle, TickTimer, (uint)_cfg.IntervalMs, IntPtr.Zero);
 
             DisposeOverlays();
             StartTopConsumer();
@@ -324,74 +356,98 @@ namespace TaskbarMonitor
 
         private void ShowMenu()
         {
-            // Without this the menu will not dismiss when you click elsewhere,
-            // because our process never becomes foreground on its own.
-            SetForegroundWindow(_host.Handle);
-            _menu.Show(Cursor.Position);
+            Native.POINT cursor;
+            if (!Native.GetCursorPos(out cursor)) return;
+
+            IntPtr menu = Native.CreatePopupMenu();
+            if (menu == IntPtr.Zero) return;
+
+            try
+            {
+                Native.AppendMenuW(menu, Native.MF_STRING, new IntPtr(CommandTaskManager), "Task Manager");
+                Native.AppendMenuW(menu, Native.MF_SEPARATOR, IntPtr.Zero, null);
+
+                uint startup = Native.MF_STRING | (Program.IsAutoStartEnabled() ? Native.MF_CHECKED : 0);
+                Native.AppendMenuW(menu, startup, new IntPtr(CommandStartup), "Start with Windows");
+                Native.AppendMenuW(menu, Native.MF_STRING, new IntPtr(CommandEditSettings), "Edit settings");
+                Native.AppendMenuW(menu, Native.MF_STRING, new IntPtr(CommandReload), "Reload settings");
+                Native.AppendMenuW(menu, Native.MF_SEPARATOR, IntPtr.Zero, null);
+                Native.AppendMenuW(menu, Native.MF_STRING, new IntPtr(CommandExit), "Exit");
+
+                // A popup will not dismiss on an outside click unless its owner is
+                // foreground first, and the null post afterwards is the documented
+                // companion to that.
+                Native.SetForegroundWindow(Handle);
+                int command = Native.TrackPopupMenuEx(menu,
+                    Native.TPM_RIGHTBUTTON | Native.TPM_RETURNCMD, cursor.X, cursor.Y, Handle, IntPtr.Zero);
+                Native.PostMessageW(Handle, Native.WM_NULL, IntPtr.Zero, IntPtr.Zero);
+
+                RunCommand(command);
+            }
+            finally
+            {
+                Native.DestroyMenu(menu);
+            }
         }
 
-        private static void Launch(string file, string arg = null)
+        private void RunCommand(int command)
+        {
+            switch (command)
+            {
+                case CommandTaskManager:
+                    Launch("taskmgr.exe", null);
+                    break;
+                case CommandStartup:
+                    Program.SetAutoStart(!Program.IsAutoStartEnabled());
+                    break;
+                case CommandEditSettings:
+                    Launch("notepad.exe", Settings.Path);
+                    break;
+                case CommandReload:
+                    ReloadSettings();
+                    break;
+                case CommandExit:
+                    Shutdown();
+                    break;
+            }
+        }
+
+        private static void Launch(string file, string argument)
         {
             try
             {
-                ProcessStartInfo psi = new ProcessStartInfo(file);
-                if (arg != null) psi.Arguments = "\"" + arg + "\"";
-                psi.UseShellExecute = true;
-                Process.Start(psi);
+                ProcessStartInfo info = new ProcessStartInfo(file);
+                if (argument != null) info.Arguments = "\"" + argument + "\"";
+                info.UseShellExecute = true;
+                Process.Start(info);
             }
+            catch { }
+        }
+
+        private static void Trim()
+        {
+            try { EmptyWorkingSet(GetCurrentProcess()); }
             catch { }
         }
 
         private void Shutdown()
         {
-            _tick.Stop();
-            _guard.Stop();
-            StopTopConsumer();
-            if (_trimTimer != null) { _trimTimer.Dispose(); _trimTimer = null; }
-            DisposeOverlays();
-            _host.Dispose();
-            ExitThread();
+            Dispose();
+            Native.PostQuitMessage(0);
         }
 
-        /// <summary>Invisible top-level window: receives shell broadcasts.</summary>
-        private sealed class Host : Form
+        public override void Dispose()
         {
-            private static readonly uint TaskbarCreated = Native.RegisterWindowMessage("TaskbarCreated");
-            private readonly TrayAppContext _ctx;
-
-            public Host(TrayAppContext ctx)
+            if (Handle != IntPtr.Zero)
             {
-                _ctx = ctx;
-                ShowInTaskbar = false;
-                FormBorderStyle = FormBorderStyle.None;
-                StartPosition = FormStartPosition.Manual;
-                Location = new System.Drawing.Point(-32000, -32000);
-                Size = new System.Drawing.Size(1, 1);
-                Opacity = 0;
+                Native.KillTimer(Handle, TickTimer);
+                Native.KillTimer(Handle, GuardTimer);
+                Native.KillTimer(Handle, TrimTimer);
             }
 
-            protected override void SetVisibleCore(bool value)
-            {
-                base.SetVisibleCore(false);   // never actually show
-            }
-
-            protected override void WndProc(ref Message m)
-            {
-                if (m.Msg == TaskbarCreated)
-                {
-                    _ctx.OnTaskbarRecreated();
-                }
-                else if (m.Msg == Native.WM_SETTINGCHANGE)
-                {
-                    string p = m.LParam != IntPtr.Zero ? Marshal.PtrToStringAuto(m.LParam) : null;
-                    if (p == "ImmersiveColorSet") _ctx.OnThemeChanged();
-                }
-                else if (m.Msg == Native.WM_DISPLAYCHANGE || m.Msg == Native.WM_DPICHANGED)
-                {
-                    _ctx.OnTaskbarRecreated();
-                }
-                base.WndProc(ref m);
-            }
+            StopTopConsumer();
+            DisposeOverlays();
+            base.Dispose();
         }
     }
 }

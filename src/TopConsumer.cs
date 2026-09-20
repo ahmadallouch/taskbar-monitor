@@ -70,10 +70,10 @@ namespace TaskbarMonitor
         // process pinning a full core only reads about 6%.
         private static readonly double[] Floor = { 0.3, 0.0, 256 * 1024.0, 2.0 };
 
-        // Kernel pseudo-processes. They can legitimately top a category - Memory
-        // Compression routinely holds gigabytes - but naming them tells you nothing you
+        // Kernel pseudo-processes. They can legitimately top a category, Memory
+        // Compression routinely holds gigabytes, but naming them tells you nothing you
         // can act on, so the rotation skips to the first real process instead.
-        private static readonly HashSet<string> Pseudo = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly string[] Pseudo =
         {
             "Memory Compression", "System", "Registry", "Secure System", "Idle", "vmmem", "vmmemWSL"
         };
@@ -112,7 +112,7 @@ namespace TaskbarMonitor
         {
             _cfg = cfg;
             Native.MEMORYSTATUSEX m = new Native.MEMORYSTATUSEX();
-            m.dwLength = (uint)Marshal.SizeOf(typeof(Native.MEMORYSTATUSEX));
+            m.dwLength = (uint)Marshal.SizeOf<Native.MEMORYSTATUSEX>();
             GlobalMemoryStatusEx(ref m);
             _totalPhys = m.ullTotalPhys > 0 ? m.ullTotalPhys : 16.0 * 1024 * 1024 * 1024;
         }
@@ -283,9 +283,33 @@ namespace TaskbarMonitor
             return false;
         }
 
+        /// <summary>
+        /// Compares the image name in place rather than materialising it. This runs for
+        /// every process on every sample, and allocating a string each time was the
+        /// single largest source of garbage in the process.
+        /// </summary>
         private static bool IsPseudo(IntPtr entry)
         {
-            return Pseudo.Contains(ReadName(entry));
+            ushort bytes = (ushort)Marshal.ReadInt16(entry, OffImageNameLen);
+            IntPtr buffer = Marshal.ReadIntPtr(entry, OffImageNameBuf);
+            if (buffer == IntPtr.Zero || bytes == 0) return true;
+
+            int length = bytes / 2;
+            for (int i = 0; i < Pseudo.Length; i++)
+            {
+                string candidate = Pseudo[i];
+                if (candidate.Length != length) continue;
+
+                bool match = true;
+                for (int c = 0; c < length; c++)
+                {
+                    char actual = (char)Marshal.ReadInt16(buffer, c * 2);
+                    if (char.ToUpperInvariant(actual) != char.ToUpperInvariant(candidate[c])) { match = false; break; }
+                }
+                if (match) return true;
+            }
+
+            return false;
         }
 
         private static string ReadName(IntPtr entry)

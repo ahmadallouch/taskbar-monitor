@@ -5,7 +5,6 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows.Forms;
 
 namespace TaskbarMonitor
 {
@@ -21,7 +20,7 @@ namespace TaskbarMonitor
     /// Per-pixel alpha via UpdateLayeredWindow means we composite onto the real
     /// acrylic - no opaque background patch that would give the game away.
     /// </summary>
-    internal sealed class Overlay : NativeWindow, IDisposable
+    internal sealed class Overlay : Win32Window
     {
         private readonly Settings _cfg;
         private Theme _theme;
@@ -63,29 +62,19 @@ namespace TaskbarMonitor
             uint dpi = Native.GetDpiForWindow(taskbar);
             _scale = dpi > 0 ? dpi / 96.0 : 1.0;
 
-            CreateParams cp = new CreateParams();
-            cp.ClassName = null;                 // let NativeWindow register a default class
-            cp.Caption = "TaskbarMonitorHost";
-            cp.Parent = taskbar;
-            cp.Style = Native.WS_CHILD | Native.WS_VISIBLE | Native.WS_CLIPSIBLINGS;
-            cp.ExStyle = Native.WS_EX_LAYERED | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOOLWINDOW;
-            cp.X = 0;
-            cp.Y = 0;
-            cp.Width = 10;
-            cp.Height = 10;
-
             _lastFrame = null;
             _x = _y = int.MinValue;
             _width = _height = 0;
-            CreateHandle(cp);
+
+            CreateWindow(
+                Native.WS_EX_LAYERED | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOOLWINDOW,
+                Native.WS_CHILD | Native.WS_VISIBLE | Native.WS_CLIPSIBLINGS,
+                taskbar, 0, 0, 10, 10, "TaskbarMonitor");
         }
 
         public void Detach()
         {
-            if (Handle != IntPtr.Zero)
-            {
-                try { DestroyHandle(); } catch { }
-            }
+            DestroyWindowHandle();
             _parent = IntPtr.Zero;
         }
 
@@ -105,21 +94,23 @@ namespace TaskbarMonitor
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
         }
 
-        protected override void WndProc(ref Message m)
+        protected override bool OnMessage(uint message, IntPtr wParam, IntPtr lParam, ref IntPtr result)
         {
-            if (m.Msg == Native.WM_RBUTTONUP)
+            if (message == Native.WM_RBUTTONUP)
             {
                 EventHandler h = RightClicked;
                 if (h != null) h(this, EventArgs.Empty);
-                return;
+                return true;
             }
-            if (m.Msg == Native.WM_LBUTTONDBLCLK)
+
+            if (message == Native.WM_LBUTTONDBLCLK)
             {
                 EventHandler h = DoubleClicked;
                 if (h != null) h(this, EventArgs.Empty);
-                return;
+                return true;
             }
-            base.WndProc(ref m);
+
+            return false;
         }
 
         // ----------------------------------------------------------------- render
@@ -408,7 +399,7 @@ namespace TaskbarMonitor
                 Width = w; Height = h;
 
                 Native.BITMAPINFOHEADER bmi = new Native.BITMAPINFOHEADER();
-                bmi.biSize = Marshal.SizeOf(typeof(Native.BITMAPINFOHEADER));
+                bmi.biSize = Marshal.SizeOf<Native.BITMAPINFOHEADER>();
                 bmi.biWidth = w;
                 bmi.biHeight = -h;          // negative: top-down, matching GDI+ row order
                 bmi.biPlanes = 1;
@@ -549,7 +540,7 @@ namespace TaskbarMonitor
             if (_valueFont != null) { _valueFont.Dispose(); _valueFont = null; }
         }
 
-        public void Dispose()
+        public override void Dispose()
         {
             DisposeFonts();
             if (_surface != null) { _surface.Dispose(); _surface = null; }
