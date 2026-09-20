@@ -115,6 +115,9 @@ namespace TaskbarMonitor
 
         // ----------------------------------------------------------------- render
 
+        /// <summary>Alpha of 1 so the window takes clicks; see the note in Render.</summary>
+        private static readonly Color HitTestable = Color.FromArgb(1, 0, 0, 0);
+
         private sealed class Column
         {
             public string Top;
@@ -176,7 +179,12 @@ namespace TaskbarMonitor
             {
                 using (Graphics g = Graphics.FromImage(surf.Canvas))
                 {
-                    g.Clear(Color.Transparent);
+                    // Not fully transparent. A layered window is hit tested by its alpha
+                    // channel, so anywhere we leave at zero lets the click fall through to
+                    // the taskbar and the right click menu becomes unreachable except on
+                    // the glyph strokes themselves. One 255th of an alpha is invisible over
+                    // the acrylic but makes the whole area clickable.
+                    g.Clear(HitTestable);
                     g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                     g.SmoothingMode = SmoothingMode.AntiAlias;
 
