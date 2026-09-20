@@ -182,6 +182,20 @@ namespace TaskbarMonitor
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr childAfter, string cls, string window);
 
+        public const int SW_HIDE = 0;
+        public const int SW_SHOWNA = 8;
+
+        public delegate bool EnumChildProc(IntPtr hWnd, IntPtr param);
+
+        [DllImport("user32.dll")]
+        public static extern bool EnumChildWindows(IntPtr parent, EnumChildProc callback, IntPtr param);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetParent(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindow(IntPtr hWnd, int command);
+
         [DllImport("user32.dll")]
         public static extern bool IsWindow(IntPtr hWnd);
 

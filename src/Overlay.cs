@@ -29,6 +29,9 @@ namespace TaskbarMonitor
         private int _x = int.MinValue, _y = int.MinValue;
         private double _scale = 1.0;
 
+        private const int MinimumLogicalWidth = 40;
+
+        private bool _hidden;
         private Surface _surface;
         private Bitmap _probe;
         private Graphics _probeG;
@@ -63,6 +66,7 @@ namespace TaskbarMonitor
             _scale = dpi > 0 ? dpi / 96.0 : 1.0;
 
             _lastFrame = null;
+            _hidden = false;
             _x = _y = int.MinValue;
             _width = _height = 0;
 
@@ -157,19 +161,37 @@ namespace TaskbarMonitor
 
             float gap = (float)(_cfg.GroupGap * _scale);
             float padX = (float)(2 * _scale);
-            float total = padX * 2;
-            for (int i = 0; i < cols.Count; i++)
-            {
-                total += cols[i].Width;
-                if (i < cols.Count - 1) total += gap;
-            }
 
             Native.RECT client;
             if (!Native.GetClientRect(_parent, out client)) return;
 
-            int w = (int)Math.Ceiling(total);
+            // On a centred taskbar the Start button and the task buttons move outward as
+            // windows are opened, and will happily run over a widget pinned to the left
+            // end. Give up groups from the right until what is left fits the real gap.
+            int available = AvailableWidth(client);
+            while (cols.Count > 1 && Total(cols, gap, padX) > available) cols.RemoveAt(cols.Count - 1);
+
+            int w = (int)Math.Ceiling(Total(cols, gap, padX));
             int h = client.Height;
             if (w <= 0 || h <= 0) return;
+
+            if (w > available || available < MinimumLogicalWidth * _scale)
+            {
+                // Nothing worth showing fits. Hide rather than draw a clipped stub.
+                if (!_hidden)
+                {
+                    _hidden = true;
+                    _lastFrame = null;
+                    Native.ShowWindow(Handle, Native.SW_HIDE);
+                }
+                return;
+            }
+
+            if (_hidden)
+            {
+                _hidden = false;
+                Native.ShowWindow(Handle, Native.SW_SHOWNA);
+            }
 
             string signature = FrameSignature(cols, w, h);
             if (signature == _lastFrame) return;
@@ -318,6 +340,84 @@ namespace TaskbarMonitor
             {
                 Native.ReleaseDC(IntPtr.Zero, screenDc);
             }
+        }
+
+        private static float Total(List<Column> cols, float gap, float padX)
+        {
+            float total = padX * 2;
+            for (int i = 0; i < cols.Count; i++)
+            {
+                total += cols[i].Width;
+                if (i < cols.Count - 1) total += gap;
+            }
+            return total;
+        }
+
+        /// <summary>
+        /// How much room there actually is at our anchor, found by asking the taskbar
+        /// where its own contents are. The XAML island spans the full width and tells us
+        /// nothing, but the legacy Start and task button windows still track the real
+        /// layout, so they are what the centred group's edge is read from.
+        /// </summary>
+        private int AvailableWidth(Native.RECT client)
+        {
+            int margin = (int)Math.Round(_cfg.Margin * _scale);
+            int breathing = (int)Math.Round(12 * _scale);
+
+            int left, right;
+            ContentBounds(client, out left, out right);
+
+            if (UseTrayAnchor())
+            {
+                int anchorRight = client.Width - margin;
+                IntPtr notify = Native.FindWindowEx(_parent, IntPtr.Zero, "TrayNotifyWnd", null);
+                Native.RECT nr;
+                if (notify != IntPtr.Zero && Native.GetWindowRect(notify, out nr))
+                {
+                    Native.POINT p = new Native.POINT(nr.Left, nr.Top);
+                    if (Native.ScreenToClient(_parent, ref p)) anchorRight = p.X - margin;
+                }
+                return Math.Max(0, anchorRight - right - breathing);
+            }
+
+            return Math.Max(0, left - margin - breathing);
+        }
+
+        /// <summary>
+        /// Leftmost and rightmost edges of the taskbar's own content, in parent client
+        /// coordinates. Children spanning nearly the whole bar are skipped: that is the
+        /// XAML host, which covers everything and would swamp both answers.
+        /// </summary>
+        private void ContentBounds(Native.RECT client, out int left, out int right)
+        {
+            int foundLeft = client.Width;
+            int foundRight = 0;
+            IntPtr self = Handle;
+            IntPtr parent = _parent;
+            int width = client.Width;
+
+            Native.EnumChildWindows(parent, delegate (IntPtr child, IntPtr param)
+            {
+                if (child == self) return true;
+                if (Native.GetParent(child) != parent) return true;
+
+                Native.RECT r;
+                if (!Native.GetWindowRect(child, out r)) return true;
+                if (r.Width <= 0 || r.Height <= 0) return true;
+                if (r.Width * 10 >= width * 9) return true;
+
+                Native.POINT topLeft = new Native.POINT(r.Left, r.Top);
+                Native.POINT bottomRight = new Native.POINT(r.Right, r.Bottom);
+                if (!Native.ScreenToClient(parent, ref topLeft)) return true;
+                if (!Native.ScreenToClient(parent, ref bottomRight)) return true;
+
+                if (topLeft.X < foundLeft) foundLeft = topLeft.X;
+                if (bottomRight.X > foundRight) foundRight = bottomRight.X;
+                return true;
+            }, IntPtr.Zero);
+
+            left = foundLeft;
+            right = foundRight;
         }
 
         /// <summary>

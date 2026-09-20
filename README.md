@@ -145,6 +145,22 @@ on first run. Edit the file and choose Reload settings from the right click menu
 | `TopRotateMs` | 3000 | How long each resource stays on screen |
 | `IncludeGpu` | true | Include per-process GPU in the rotation |
 
+## Crowding on a centred taskbar
+
+Windows 11 centres the taskbar contents, so the Start button and the task buttons move
+outward as you open windows. A widget pinned to the left end will eventually be run
+over by them.
+
+To avoid that, the widget measures the real gap every time it redraws and gives up
+groups from the right until what remains fits: first the top process panel, then
+network, then memory. When the space comes back, so do they. If the gap closes
+entirely it hides rather than draw a clipped stub.
+
+The measurement comes from the taskbar's own child windows. The XAML host that
+actually paints the Windows 11 taskbar spans its full width and says nothing useful,
+but the legacy `Start` and task button windows underneath still track the real layout,
+so the leftmost edge of the centred group is read from those.
+
 ## Multiple monitors and display scaling
 
 Windows gives each additional monitor its own taskbar window, of class
