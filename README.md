@@ -17,6 +17,9 @@ by design but has not been verified on real hardware.
 It is not code signed, so SmartScreen will warn on first run. Choose More info, then
 Run anyway. Each release lists a SHA-256 checksum for the download.
 
+Windows offers no supported way to extend the taskbar, so this attaches to the
+taskbar's own window. A Windows update could change that and stop it drawing.
+
 ## What it shows
 
 ```
@@ -46,17 +49,7 @@ the menu. Every key is in that file; the ones worth knowing:
 | `ShowCpu` `ShowRam` `ShowNetwork` | true | Which readings to include |
 | `WarnPercent` `CriticalPercent` | 60, 85 | Orange and red thresholds |
 | `ShowTopConsumer` | true | The rotating process panel |
-| `ShowOnAllTaskbars` | true | Draw on secondary monitors too |
-
-## Limitations
-
-Multiple monitor support is implemented, one instance per taskbar at its own DPI, but
-it has not been tested on real multi monitor hardware.
-
-Windows 11 has no supported way to add to the taskbar, so this reparents itself into
-the taskbar's own window rather than floating above it. That is not a sanctioned API.
-A future Windows update could change the taskbar's internals and break it, in which
-case the widget stops drawing.
+| `ShowOnAllTaskbars` | true | Secondary monitors too, untested on real hardware |
 
 ## Build
 
