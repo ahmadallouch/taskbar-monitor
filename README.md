@@ -120,6 +120,39 @@ While a fullscreen application is in front, meaning a game or a fullscreen video
 taskbar is covered and nothing drawn could be seen, so both the drawing and the
 process ranking stop until it goes away.
 
+## What Windows will say about the download
+
+The released executable is not code signed, so the first person to run it after
+downloading will see Microsoft Defender SmartScreen: a blue dialog saying "Windows
+protected your PC" and "Microsoft Defender SmartScreen prevented an unrecognized app
+from starting". Choosing More info and then Run anyway starts it, and the warning does
+not come back on that machine.
+
+This is a reputation check rather than a signature check. Files downloaded through a
+browser are tagged with the mark of the web, and on first run SmartScreen asks whether
+that binary is known. A new binary from a small project is not, so it is flagged.
+Signing does not by itself switch the warning off: Extended Validation certificates
+used to grant immediate SmartScreen trust, but that stopped being true in 2024, and
+signed binaries now accumulate reputation the same way unsigned ones do. The practical
+difference is that reputation attaches to a publisher identity and carries across
+releases, whereas an unsigned binary starts from nothing every time it changes.
+
+It is worth separating this from antivirus. Defender's scanning engine does not object
+to this program, it reports no threat. The behaviour it exhibits, ranking every process
+on the system, writing a Run key and attaching a window to the shell, is the sort of
+thing heuristics elsewhere may take an interest in, so a third party scanner flagging
+it would not be shocking, but nothing here is doing anything it does not document.
+
+If you would rather not take the binary on trust, the hash of each release is published
+with it, and building from source takes one command and produces a file the mark of the
+web never touches.
+
+To verify a download:
+
+```
+Get-FileHash .\TaskbarMonitor.exe -Algorithm SHA256
+```
+
 ## Privileges
 
 It does not need administrator rights and should not be run elevated. The manifest
