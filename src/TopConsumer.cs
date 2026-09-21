@@ -68,7 +68,7 @@ namespace TaskbarMonitor
         // so the widget never cycles to "DISK 0 B/s". The CPU floor is deliberately low:
         // percentages here are shares of the whole machine, so on a 16-core box even a
         // process pinning a full core only reads about 6%.
-        private static readonly double[] Floor = { 0.3, 0.0, 256 * 1024.0, 2.0 };
+        private static readonly double[] Floor = { 0.3, 0.0, 256 * 1024.0, 1.0 };
 
         // Kernel pseudo-processes. They can legitimately top a category, Memory
         // Compression routinely holds gigabytes, but naming them tells you nothing you
@@ -348,8 +348,8 @@ namespace TaskbarMonitor
             private const uint PDH_FMT_DOUBLE = 0x00000200;
             private const int PDH_MORE_DATA = unchecked((int)0x800007D2);
 
-            [DllImport("pdh.dll")] private static extern int PdhOpenQueryW(string src, IntPtr userData, out IntPtr query);
-            [DllImport("pdh.dll")] private static extern int PdhAddEnglishCounterW(IntPtr query, string path, IntPtr userData, out IntPtr counter);
+            [DllImport("pdh.dll", CharSet = CharSet.Unicode)] private static extern int PdhOpenQueryW(string src, IntPtr userData, out IntPtr query);
+            [DllImport("pdh.dll", CharSet = CharSet.Unicode)] private static extern int PdhAddEnglishCounterW(IntPtr query, string path, IntPtr userData, out IntPtr counter);
             [DllImport("pdh.dll")] private static extern int PdhCollectQueryData(IntPtr query);
             [DllImport("pdh.dll")] private static extern int PdhGetFormattedCounterArrayW(IntPtr counter, uint format, ref int bufferSize, out int itemCount, IntPtr items);
 

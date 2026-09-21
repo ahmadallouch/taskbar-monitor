@@ -120,6 +120,28 @@ While a fullscreen application is in front, meaning a game or a fullscreen video
 taskbar is covered and nothing drawn could be seen, so both the drawing and the
 process ranking stop until it goes away.
 
+## Privileges
+
+It does not need administrator rights and should not be run elevated. The manifest
+declares `asInvoker`, so it runs as whoever starts it.
+
+Everything it does is available to an ordinary user. Parenting a window into the
+taskbar works because the widget runs as the same user at the same integrity level as
+Explorer. Ranking processes through `NtQuerySystemInformation` returns CPU time,
+working set and disk counters for every process without any special right, which is
+the same information Task Manager shows before you press "show processes from all
+users". GPU counters are readable through PDH by any user. Autostart is written under
+`HKCU`, the current user's own hive.
+
+This was developed and tested on an account whose token carried `BUILTIN\Administrators`
+as deny only, meaning that membership granted nothing to any access check, so none of
+it was relying on administrator authority.
+
+The one thing to watch is that `settings.json` is written next to the executable. Keep
+it somewhere your account can write, such as under your user profile. In a location
+like `Program Files` the write fails, and it falls back to defaults every run rather
+than reporting an error.
+
 ## Configuration
 
 Settings live in `settings.json` next to the executable and are written with defaults
